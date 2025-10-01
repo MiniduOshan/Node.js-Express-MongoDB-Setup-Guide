@@ -1,6 +1,6 @@
-# Node.js + Express + MongoDB (Mongoose) Setup Guide
+# Node.js + Express + MongoDB (Mongoose) with Auth, Cookies, Sessions, Bcrypt & JWT
 
-A complete step-by-step guide to set up a **Node.js** project with **Express** and **MongoDB (Mongoose)**, including configuration, project structure, best practices, **cookies**, **session handling**, and **JWT (installation & token creation)**.
+A complete step-by-step guide to set up a **Node.js** project with **Express** and **MongoDB (Mongoose)**, including CRUD APIs, **sessions & cookies**, **bcrypt password hashing**, and **JWT authentication**.
 
 ---
 
@@ -12,14 +12,15 @@ A complete step-by-step guide to set up a **Node.js** project with **Express** a
 * [Environment Variables](#environment-variables)
 * [Connecting to MongoDB](#connecting-to-mongodb)
 * [Creating Express Server](#creating-express-server)
-* [Creating Models](#creating-models)
-* [Creating Routes and Controllers](#creating-routes-and-controllers)
-* [Using Middleware](#using-middleware)
-* [Cookies](#cookies)
-* [Session Handling](#session-handling)
-* [JWT: Install & Create Tokens](#jwt-install--create-tokens)
-* [Protecting Routes (Auth Middleware)](#protecting-routes-auth-middleware)
-* [Testing the Server](#testing-the-server)
+* [Cookies & Sessions](#cookies--sessions)
+* [Authentication (Bcrypt + JWT)](#authentication-bcrypt--jwt)
+
+  * [User Model](#user-model)
+  * [Auth Controller](#auth-controller)
+  * [Auth Routes](#auth-routes)
+  * [JWT Middleware](#jwt-middleware)
+* [CRUD API](#crud-api)
+* [Testing the API](#testing-the-api)
 * [Project Structure](#project-structure)
 * [Best Practices](#best-practices)
 * [Troubleshooting](#troubleshooting)
@@ -29,20 +30,18 @@ A complete step-by-step guide to set up a **Node.js** project with **Express** a
 
 ## Prerequisites
 
-* Node.js (v14 or above)
+* Node.js (v14 or higher)
 * npm or yarn
-* MongoDB installed locally or a MongoDB Atlas account
-* Basic knowledge of JavaScript and Node.js
+* MongoDB installed locally or a MongoDB Atlas cluster
+* Basic knowledge of JavaScript & APIs
 
 ---
 
 ## Project Setup
 
-Create a new Node.js project:
-
 ```bash
-mkdir my-node-app
-cd my-node-app
+mkdir my-full-app
+cd my-full-app
 npm init -y
 ```
 
@@ -50,34 +49,8 @@ npm init -y
 
 ## Installing Dependencies
 
-Install core dependencies:
-
 ```bash
-npm install express mongoose dotenv
-```
-
-**What these do:**
-
-* **express** → Web framework for building APIs.
-* **mongoose** → ODM (Object Data Modeling) library for MongoDB.
-* **dotenv** → Loads environment variables from `.env`.
-
-Install auth, cookies and sessions related deps:
-
-```bash
-npm install cookie-parser express-session connect-mongo jsonwebtoken
-```
-
-**What these do:**
-
-* **cookie-parser** → Parses cookies from incoming requests.
-* **express-session** → Creates server-side sessions.
-* **connect-mongo** → Stores sessions in MongoDB (production-ready).
-* **jsonwebtoken** → Create/verify JWT access/refresh tokens.
-
-Install development dependency:
-
-```bash
+npm install express mongoose dotenv cookie-parser express-session connect-mongo bcrypt jsonwebtoken
 npm install -D nodemon
 ```
 
@@ -94,30 +67,25 @@ Update `package.json` scripts:
 
 ## Environment Variables
 
-Create a `.env` file with required secrets and config.
+Create `.env`:
 
-```
-MONGO_URI=mongodb://localhost:27017/mydatabase
+```env
 PORT=5000
-SESSION_SECRET=super-secret-session-key
-JWT_SECRET=super-secret-jwt-key
-NODE_ENV=development
-COOKIE_DOMAIN=localhost
+MONGO_URI=mongodb://localhost:27017/mydatabase
+SESSION_SECRET=mySuperSessionSecret
+JWT_ACCESS_SECRET=myStrongAccessSecret
+JWT_REFRESH_SECRET=myStrongRefreshSecret
+COOKIE_SECURE=false
 ```
-
-> **Never commit real secrets.** Use strong, unique values in production.
 
 ---
 
 ## Connecting to MongoDB
 
-1. Create `db.js`:
-
 ```javascript
 // db.js
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-
 dotenv.config();
 
 const connectDB = async () => {
@@ -126,9 +94,9 @@ const connectDB = async () => {
       useNewUrlParser: true,
       useUnifiedTopology: true,
     });
-    console.log('MongoDB connected with Mongoose');
+    console.log('✅ MongoDB connected');
   } catch (err) {
-    console.error(err);
+    console.error('❌ MongoDB connection error:', err.message);
     process.exit(1);
   }
 };
@@ -154,366 +122,248 @@ connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const isProd = process.env.NODE_ENV === 'production';
 
-// Parse JSON and cookies
+// Middleware
 app.use(express.json());
 app.use(cookieParser());
 
-// Session middleware (server-side sessions)
+// Session setup
 app.use(
   session({
-    name: 'sid',
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }),
     cookie: {
       httpOnly: true,
-      secure: isProd, // true if behind HTTPS in production
-      sameSite: isProd ? 'lax' : 'lax',
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
-      domain: process.env.COOKIE_DOMAIN || undefined,
+      secure: process.env.COOKIE_SECURE === 'true',
+      maxAge: 1000 * 60 * 60, // 1 hour
     },
   })
 );
 
-app.get('/', (req, res) => {
-  res.send('Hello World!');
-});
-
 // Routes
-const userRoutes = require('./routes/userRoutes');
-const authRoutes = require('./routes/authRoutes');
-app.use('/api/users', userRoutes);
-app.use('/api/auth', authRoutes);
+app.get('/', (req, res) => res.send('Server running ✅'));
+app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/auth', require('./routes/authRoutes'));
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+```
+
+---
+
+## Cookies & Sessions
+
+Example session usage:
+
+```javascript
+app.get('/session-demo', (req, res) => {
+  req.session.views = (req.session.views || 0) + 1;
+  res.json({ views: req.session.views });
 });
 ```
 
 ---
 
-## Creating Models
+## Authentication (Bcrypt + JWT)
 
-Example **User model** with Mongoose:
+### User Model
 
 ```javascript
 // models/User.js
 const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
 
 const userSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-    trim: true,
-  },
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    lowercase: true,
-  },
-  passwordHash: {
-    type: String,
-    required: false, // set true if you add password-based login
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true },
+  password: { type: String, required: true, minlength: 6, select: false },
 });
+
+// Hash before save
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) return next();
+  this.password = await bcrypt.hash(this.password, 10);
+  next();
+});
+
+// Compare passwords
+userSchema.methods.comparePassword = function (candidate) {
+  return bcrypt.compare(candidate, this.password);
+};
 
 module.exports = mongoose.model('User', userSchema);
 ```
 
-> For brevity, hashing is not shown. In real apps, hash with **bcrypt** and validate input.
-
 ---
 
-## Creating Routes and Controllers
-
-**Route:**
+### Auth Controller
 
 ```javascript
-// routes/userRoutes.js
-const express = require('express');
-const router = express.Router();
-const { getUsers, createUser } = require('../controllers/userController');
-const { requireAuth } = require('../middleware/auth');
-
-router.get('/', requireAuth, getUsers); // protected with JWT or session
-router.post('/', createUser);
-
-module.exports = router;
-```
-
-**Controller:**
-
-```javascript
-// controllers/userController.js
+// controllers/authController.js
 const User = require('../models/User');
+const jwt = require('jsonwebtoken');
 
-// Get all users
-const getUsers = async (req, res) => {
+const signToken = (id) =>
+  jwt.sign({ id }, process.env.JWT_ACCESS_SECRET, { expiresIn: '15m' });
+
+const register = async (req, res) => {
   try {
-    const users = await User.find();
-    res.json(users);
+    const { name, email, password } = req.body;
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(400).json({ error: 'Email exists' });
+
+    const user = await User.create({ name, email, password });
+    res.status(201).json({ message: 'Registered', user: { id: user._id, email } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
 
-// Create a new user
-const createUser = async (req, res) => {
+const login = async (req, res) => {
   try {
-    const user = new User(req.body);
-    await user.save();
-    res.status(201).json(user);
+    const { email, password } = req.body;
+    const user = await User.findOne({ email }).select('+password');
+    if (!user || !(await user.comparePassword(password)))
+      return res.status(400).json({ error: 'Invalid credentials' });
+
+    const token = signToken(user._id);
+    res.cookie('jwt', token, { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true' });
+    res.json({ message: 'Logged in', token });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 };
 
-module.exports = { getUsers, createUser };
-```
-
-Register Routes already shown in **Creating Express Server**.
-
----
-
-## Using Middleware
-
-Example custom middleware:
-
-```javascript
-app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path}`);
-  next();
-});
-```
-
-Use `express.json()` to parse incoming JSON requests.
-
----
-
-## Cookies
-
-Install & use **cookie-parser** (already installed above):
-
-```javascript
-// index.js
-const cookieParser = require('cookie-parser');
-app.use(cookieParser());
-```
-
-**Set a cookie:**
-
-```javascript
-// routes/authRoutes.js (example endpoint)
-res.cookie('theme', 'dark', {
-  httpOnly: true,
-  sameSite: 'lax',
-  secure: process.env.NODE_ENV === 'production',
-  maxAge: 1000 * 60 * 60 * 24, // 1 day
-});
-```
-
-**Read a cookie:**
-
-```javascript
-const theme = req.cookies.theme; // requires cookie-parser
-```
-
-> Prefer **HttpOnly** cookies for sensitive data (tokens, session IDs). Avoid storing secrets in non-HttpOnly cookies.
-
----
-
-## Session Handling
-
-Install
-
-```bash
-npm install express-session connect-mongo
-```
-
-Initialize (already shown in `index.js`):
-
-```javascript
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({ mongoUrl: process.env.MONGO_URI }),
-    cookie: { httpOnly: true, secure: isProd, sameSite: 'lax' },
-  })
-);
-```
-
-**Using the session:**
-
-```javascript
-// routes/authRoutes.js
-router.post('/login-session', async (req, res) => {
-  // ... authenticate user ...
-  req.session.userId = 'someUserId';
-  res.json({ message: 'Logged in with session' });
-});
-
-router.post('/logout-session', (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie('sid');
-    res.json({ message: 'Logged out' });
-  });
-});
-```
-
-> Sessions are stateful (server stores data). JWT is stateless (server verifies token signature). You can use either or both depending on needs.
-
----
-
-## JWT: Install & Create Tokens
-
-Install JSON Web Tokens:
-
-```bash
-npm install jsonwebtoken
-```
-
-**Token utility:**
-
-```javascript
-// utils/jwt.js
-const jwt = require('jsonwebtoken');
-
-const signAccessToken = (payload, opts = {}) => {
-  return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: '15m',
-    ...opts,
-  });
+const me = async (req, res) => {
+  res.json({ user: req.user });
 };
 
-const verifyToken = (token) => jwt.verify(token, process.env.JWT_SECRET);
-
-module.exports = { signAccessToken, verifyToken };
+module.exports = { register, login, me };
 ```
 
-**Auth routes (issue JWT and set as HttpOnly cookie):**
+---
+
+### Auth Routes
 
 ```javascript
 // routes/authRoutes.js
 const express = require('express');
+const { register, login, me } = require('../controllers/authController');
+const { requireJWT } = require('../middleware/auth');
 const router = express.Router();
-const { signAccessToken } = require('../utils/jwt');
 
-// Fake login for demo
-router.post('/login', async (req, res) => {
-  const { email } = req.body;
-  // TODO: verify user + password (hash compare), omitted for brevity
-  const userId = '123';
-
-  const accessToken = signAccessToken({ sub: userId, email });
-
-  // Put token in HttpOnly cookie (recommended for browsers)
-  res.cookie('access_token', accessToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 1000 * 60 * 15, // 15 minutes
-  });
-
-  res.json({ message: 'Logged in', accessToken }); // also return in body if needed (e.g., mobile clients)
-});
-
-router.post('/logout', (req, res) => {
-  res.clearCookie('access_token');
-  res.json({ message: 'Logged out' });
-});
+router.post('/register', register);
+router.post('/login', login);
+router.get('/me', requireJWT, me);
 
 module.exports = router;
 ```
 
-> You can also implement **refresh tokens** with longer expiry, stored in HttpOnly cookies or DB, to re-issue short-lived access tokens.
-
 ---
 
-## Protecting Routes (Auth Middleware)
-
-Create a middleware to read JWT from the Authorization header **or** cookie and verify it.
+### JWT Middleware
 
 ```javascript
 // middleware/auth.js
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-const requireAuth = (req, res, next) => {
+const requireJWT = async (req, res, next) => {
   try {
-    let token = null;
+    const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token' });
 
-    // Prefer Authorization: Bearer <token>
-    const auth = req.headers.authorization || '';
-    if (auth.startsWith('Bearer ')) {
-      token = auth.substring(7);
-    }
-
-    // Fallback to cookie
-    if (!token && req.cookies && req.cookies.access_token) {
-      token = req.cookies.access_token;
-    }
-
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: payload.sub, email: payload.email };
+    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+    req.user = await User.findById(decoded.id).select('_id name email');
     next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+  } catch {
+    res.status(401).json({ error: 'Invalid token' });
   }
 };
 
-module.exports = { requireAuth };
-```
-
-**Use it on routes:**
-
-```javascript
-// routes/userRoutes.js
-const { requireAuth } = require('../middleware/auth');
-router.get('/', requireAuth, getUsers);
+module.exports = { requireJWT };
 ```
 
 ---
 
-## Testing the Server
+## CRUD API
 
-Run the development server:
+### User Controller
+
+```javascript
+// controllers/userController.js
+const User = require('../models/User');
+
+const getUsers = async (req, res) => {
+  const users = await User.find().select('name email');
+  res.json(users);
+};
+
+const updateUser = async (req, res) => {
+  const updated = await User.findByIdAndUpdate(req.params.id, req.body, { new: true });
+  if (!updated) return res.status(404).json({ error: 'User not found' });
+  res.json(updated);
+};
+
+const deleteUser = async (req, res) => {
+  const deleted = await User.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: 'User not found' });
+  res.json({ message: 'User deleted' });
+};
+
+module.exports = { getUsers, updateUser, deleteUser };
+```
+
+### User Routes
+
+```javascript
+// routes/userRoutes.js
+const express = require('express');
+const { getUsers, updateUser, deleteUser } = require('../controllers/userController');
+const { requireJWT } = require('../middleware/auth');
+const router = express.Router();
+
+router.get('/', requireJWT, getUsers);
+router.put('/:id', requireJWT, updateUser);
+router.delete('/:id', requireJWT, deleteUser);
+
+module.exports = router;
+```
+
+---
+
+## Testing the API
+
+Start server:
 
 ```bash
 npm run dev
 ```
 
-Test endpoints with Postman or curl:
+Test with Postman or curl:
 
 ```bash
-GET http://localhost:5000/api/users           // requires JWT
-POST http://localhost:5000/api/auth/login     // get token
-POST http://localhost:5000/api/auth/logout    // clear token cookie
-```
-
-Example login request body:
-
-```json
+# Register
+POST http://localhost:5000/api/auth/register
 {
-  "email": "john@example.com",
-  "password": "supersecret"
+  "name": "Alice",
+  "email": "alice@example.com",
+  "password": "Password123"
 }
-```
 
-To call protected route with **Bearer token**:
+# Login
+POST http://localhost:5000/api/auth/login
+{
+  "email": "alice@example.com",
+  "password": "Password123"
+}
 
-```
-Authorization: Bearer <accessToken>
+# Get profile
+GET http://localhost:5000/api/auth/me
+
+# Get all users (JWT protected)
+GET http://localhost:5000/api/users
 ```
 
 ---
@@ -521,76 +371,52 @@ Authorization: Bearer <accessToken>
 ## Project Structure
 
 ```
-my-node-app/
+my-full-app/
 │
 ├── controllers/
+│   ├── authController.js
 │   └── userController.js
 ├── middleware/
 │   └── auth.js
 ├── models/
 │   └── User.js
 ├── routes/
-│   ├── userRoutes.js
-│   └── authRoutes.js
-├── utils/
-│   └── jwt.js
+│   ├── authRoutes.js
+│   └── userRoutes.js
 ├── db.js
 ├── index.js
 ├── package.json
-├── package-lock.json
-└── .env
+├── .env
 ```
 
 ---
 
 ## Best Practices
 
-* Keep routes, controllers, and models in separate folders.
-* Use environment variables for sensitive information.
-* **HTTPS in production** to secure cookies & tokens.
-* Short-lived access tokens (e.g., 15m) + refresh tokens (e.g., 7d) if needed.
-* Validate request data and sanitize inputs.
-* Hash passwords (bcrypt) and never store plaintext passwords.
-* Rotate secrets when compromised, and handle token revocation (blacklist/rotation) if required.
+* Use **httpOnly cookies** for JWT to prevent XSS attacks.
+* Store secrets in `.env`, never commit them.
+* Hash all passwords with bcrypt.
+* Use session for server-rendered apps; JWT for APIs/mobile.
+* Add input validation with `joi` or `zod`.
 
 ---
 
 ## Troubleshooting
 
-* **MongoDB connection failed:**
-
-  * Ensure MongoDB service is running.
-  * Verify `MONGO_URI` in `.env`.
-
-* **Server not starting:**
-
-  * Ensure `PORT` is set.
-  * Check for syntax errors in `index.js`.
-
-* **JWT always invalid/expired:**
-
-  * Confirm the same `JWT_SECRET` is used for signing & verifying.
-  * Check system time & token expiry.
-  * Make sure you pass token via `Authorization` header or `access_token` cookie.
-
-* **Session not persisting:**
-
-  * Ensure cookie name matches and is not blocked by the browser.
-  * For cross-site requests, consider `sameSite: 'none'` and `secure: true` (HTTPS required).
+* **Mongo not connecting** → Check `MONGO_URI` and ensure MongoDB is running.
+* **JWT errors** → Ensure token secret matches `JWT_ACCESS_SECRET`.
+* **Sessions not persisting** → Verify `COOKIE_SECURE` and domain config.
 
 ---
 
 ## References
 
-* [Node.js Docs](https://nodejs.org/en/docs/)
 * [Express Docs](https://expressjs.com/)
-* [MongoDB Docs](https://docs.mongodb.com/)
 * [Mongoose Docs](https://mongoosejs.com/docs/)
+* [bcrypt](https://github.com/kelektiv/node.bcrypt.js)
 * [jsonwebtoken](https://github.com/auth0/node-jsonwebtoken)
 * [express-session](https://github.com/expressjs/session)
-* [connect-mongo](https://github.com/jdesboeufs/connect-mongo)
-* [cookie-parser](https://github.com/expressjs/cookie-parser)
 
 ---
 
-**Happy Coding! 🚀**
+Happy Cooding🚀
